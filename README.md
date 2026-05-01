@@ -123,7 +123,7 @@ Use o script de instalação incluído neste repositório:
 
 ```bash
 git clone https://github.com/hFerbic/havitsolution
-cd fuxi-h3-linux-fix
+cd havitsolution
 chmod +x install.sh
 ./install.sh
 ```
