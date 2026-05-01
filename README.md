@@ -122,7 +122,7 @@ sudo udevadm control --reload-rules
 Use o script de instalação incluído neste repositório:
 
 ```bash
-git clone https://github.com/seu-usuario/fuxi-h3-linux-fix
+git clone https://github.com/hFerbic/havitsolution
 cd fuxi-h3-linux-fix
 chmod +x install.sh
 ./install.sh
