@@ -1,5 +1,7 @@
 # 🎧 Havit Fuxi-H3 — Fix de Volume no Linux (PipeWire)
 
+> 🌐 **English Version**: [README_ENG.md](README_ENG.md).
+
 Correção para o bug onde baixar o volume no Linux muta um dos canais do headset imediatamente, deixando apenas um lado funcionando em qualquer volume abaixo de 100%.
 
 Testado em: **Nobara Linux** com **KDE Plasma** e **PipeWire**.
