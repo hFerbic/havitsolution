@@ -4,7 +4,7 @@
 
 Correção para o bug onde baixar o volume no Linux muta um dos canais do headset imediatamente, deixando apenas um lado funcionando em qualquer volume abaixo de 100%.
 
-Testado em: **Nobara Linux** com **KDE Plasma** e **PipeWire**.
+Testado em: **Nobara Linux** e **Bazzite** com **KDE Plasma** e **PipeWire**.
 
 ---
 
@@ -28,10 +28,11 @@ numid=10, name='PCM Playback Volume', index=1   min=0, max=100  dBminmax: 0.00dB
 
 ## A Solução
 
-A correção tem duas partes:
+A correção tem três partes:
 
 1. **WirePlumber**: Configurar o dispositivo para usar soft-mixer (volume controlado por software pelo PipeWire), travando o hardware em 100%.
 2. **udev**: Criar uma regra que trava automaticamente o volume do hardware em 100% sempre que o dongle for conectado.
+3. **systemd (usuário)**: Reaplicar o fix após login, quando o WirePlumber reinicia e pode resetar o volume de hardware.
 
 ---
 
@@ -88,9 +89,16 @@ Cole o conteúdo:
 ```bash
 #!/bin/bash
 sleep 2
-CARD=$(amixer -l | grep -i 'FuxiH3\|Fuxi-H3' | head -1 | grep -o 'card [0-9]*' | grep -o '[0-9]*')
-amixer -c "$CARD" sset 'PCM',0 100%,100%
-amixer -c "$CARD" sset 'PCM',1 100%
+
+# amixer -l foi removido no alsa-utils 1.2.15+; usar /proc/asound/cards
+CARD=$(grep -iE 'FuxiH3|Fuxi-H3' /proc/asound/cards 2>/dev/null | head -1 | awk '{print $1}')
+
+if [ -z "$CARD" ]; then
+    exit 0
+fi
+
+/usr/bin/amixer -c "$CARD" sset 'PCM',0 100%,100%
+/usr/bin/amixer -c "$CARD" sset 'PCM',1 100%
 ```
 
 Dê permissão de execução:
@@ -115,6 +123,17 @@ Recarregue as regras udev:
 
 ```bash
 sudo udevadm control --reload-rules
+```
+
+### 4. Serviço systemd do usuário (recomendado)
+
+Garante que o volume de hardware seja reaplicado após cada login:
+
+```bash
+mkdir -p ~/.config/systemd/user/
+cp scripts/fuxi-h3-volume-fix.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now fuxi-h3-volume-fix.service
 ```
 
 ---
@@ -148,6 +167,15 @@ api.alsa.ignore-dB = "true"
 api.alsa.enable-hw-volume = "false"
 ```
 
+Confirme também o volume de hardware do ALSA:
+
+```bash
+CARD=$(grep -i Fuxi /proc/asound/cards | awk '{print $1}')
+/usr/bin/amixer -c "$CARD" sget 'PCM'
+```
+
+A saída esperada mostra `100 [100%]` em ambos os canais (Front Left, Front Right e Mono).
+
 ---
 
 ## Compatibilidade com outros modos de conexão
@@ -179,10 +207,44 @@ lsusb | grep -i "040b\|Weltrend\|Fuxi\|XiiSound"
 
 ---
 
+## Solução de problemas
+
+### O fix parece instalado, mas o som ainda sai de um lado
+
+Em distros recentes (Fedora, Bazzite, Nobara), o `alsa-utils` 1.2.15+ **removeu o comando `amixer -l`**. Versões antigas deste repositório usavam essa opção para localizar a placa de som, fazendo o script udev falhar silenciosamente.
+
+Verifique o volume de hardware:
+
+```bash
+CARD=$(grep -i Fuxi /proc/asound/cards | awk '{print $1}')
+/usr/bin/amixer -c "$CARD" sget 'PCM'
+```
+
+Se os valores estiverem em `0` em vez de `100`, reaplique manualmente:
+
+```bash
+/usr/local/bin/fuxi-h3-volume-fix.sh
+```
+
+### Os botões físicos do fone mutam um canal
+
+Os botões de volume do headset alteram o volume diretamente no dongle, contornando o Linux. Reconecte o dongle USB ou execute o script de fix acima.
+
+---
+
 ## Desinstalação
 
 ```bash
+./uninstall.sh
+```
+
+Ou manualmente:
+
+```bash
 rm -f ~/.config/wireplumber/wireplumber.conf.d/fuxi-h3-fix.conf
+systemctl --user disable --now fuxi-h3-volume-fix.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/fuxi-h3-volume-fix.service
+systemctl --user daemon-reload
 sudo rm -f /usr/local/bin/fuxi-h3-volume-fix.sh
 sudo rm -f /etc/udev/rules.d/99-fuxi-h3.rules
 sudo udevadm control --reload-rules

@@ -19,6 +19,13 @@ echo ""
 rm -f "$HOME/.config/wireplumber/wireplumber.conf.d/fuxi-h3-fix.conf"
 echo -e "${GREEN}✓${NC} Regra do WirePlumber removida"
 
+if systemctl --user is-enabled --quiet fuxi-h3-volume-fix.service 2>/dev/null; then
+    systemctl --user disable --now fuxi-h3-volume-fix.service
+fi
+rm -f "$HOME/.config/systemd/user/fuxi-h3-volume-fix.service"
+systemctl --user daemon-reload
+echo -e "${GREEN}✓${NC} Serviço systemd do usuário removido"
+
 sudo rm -f /usr/local/bin/fuxi-h3-volume-fix.sh
 echo -e "${GREEN}✓${NC} Script de volume removido"
 

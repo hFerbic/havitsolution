@@ -4,7 +4,7 @@
 
 Fix for the bug where lowering the volume on Linux immediately mutes one of the headset channels, leaving only one side working at any volume below 100%.
 
-Tested on: **Nobara Linux** with **KDE Plasma** and **PipeWire**.
+Tested on: **Nobara Linux** and **Bazzite** with **KDE Plasma** and **PipeWire**.
 
 ---
 
@@ -29,10 +29,11 @@ numid=10, name='PCM Playback Volume', index=1   min=0, max=100   dBminmax: 0.00d
 
 ## The Solution
 
-The fix has two parts:
+The fix has three parts:
 
 1. **WirePlumber**: Configure the device to use soft-mixer (volume controlled via software by PipeWire), locking the hardware at 100%.
 2. **udev**: Create a rule that automatically locks the hardware volume at 100% whenever the dongle is connected.
+3. **systemd (user)**: Reapply the fix after login, when WirePlumber restarts and may reset hardware volume.
 
 ---
 
@@ -93,9 +94,16 @@ Paste the content:
 ```bash
 #!/bin/bash
 sleep 2
-CARD=$(amixer -l | grep -i 'FuxiH3\|Fuxi-H3' | head -1 | grep -o 'card [0-9]*' | grep -o '[0-9]*')
-amixer -c "$CARD" sset 'PCM',0 100%,100%
-amixer -c "$CARD" sset 'PCM',1 100%
+
+# amixer -l was removed in alsa-utils 1.2.15+; use /proc/asound/cards instead
+CARD=$(grep -iE 'FuxiH3|Fuxi-H3' /proc/asound/cards 2>/dev/null | head -1 | awk '{print $1}')
+
+if [ -z "$CARD" ]; then
+    exit 0
+fi
+
+/usr/bin/amixer -c "$CARD" sset 'PCM',0 100%,100%
+/usr/bin/amixer -c "$CARD" sset 'PCM',1 100%
 
 ```
 
@@ -124,6 +132,18 @@ Reload udev rules:
 
 ```bash
 sudo udevadm control --reload-rules
+
+```
+
+### 4. User systemd service (recommended)
+
+Ensures hardware volume is reapplied after each login:
+
+```bash
+mkdir -p ~/.config/systemd/user/
+cp scripts/fuxi-h3-volume-fix.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now fuxi-h3-volume-fix.service
 
 ```
 
@@ -161,6 +181,16 @@ api.alsa.enable-hw-volume = "false"
 
 ```
 
+Also confirm ALSA hardware volume:
+
+```bash
+CARD=$(grep -i Fuxi /proc/asound/cards | awk '{print $1}')
+/usr/bin/amixer -c "$CARD" sget 'PCM'
+
+```
+
+Expected output shows `100 [100%]` on both channels (Front Left, Front Right, and Mono).
+
 ---
 
 ## Compatibility with Other Connection Modes
@@ -193,10 +223,47 @@ lsusb | grep -i "040b\|Weltrend\|Fuxi\|XiiSound"
 
 ---
 
+## Troubleshooting
+
+### Fix appears installed, but audio still plays on one side only
+
+On recent distros (Fedora, Bazzite, Nobara), `alsa-utils` 1.2.15+ **removed the `amixer -l` command**. Older versions of this repository used that option to find the sound card, causing the udev script to fail silently.
+
+Check hardware volume:
+
+```bash
+CARD=$(grep -i Fuxi /proc/asound/cards | awk '{print $1}')
+/usr/bin/amixer -c "$CARD" sget 'PCM'
+
+```
+
+If values are `0` instead of `100`, reapply manually:
+
+```bash
+/usr/local/bin/fuxi-h3-volume-fix.sh
+
+```
+
+### Headset physical volume buttons mute one channel
+
+The headset volume buttons change volume directly on the dongle, bypassing Linux. Reconnect the USB dongle or run the fix script above.
+
+---
+
 ## Uninstallation
 
 ```bash
+./uninstall.sh
+
+```
+
+Or manually:
+
+```bash
 rm -f ~/.config/wireplumber/wireplumber.conf.d/fuxi-h3-fix.conf
+systemctl --user disable --now fuxi-h3-volume-fix.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/fuxi-h3-volume-fix.service
+systemctl --user daemon-reload
 sudo rm -f /usr/local/bin/fuxi-h3-volume-fix.sh
 sudo rm -f /etc/udev/rules.d/99-fuxi-h3.rules
 sudo udevadm control --reload-rules
