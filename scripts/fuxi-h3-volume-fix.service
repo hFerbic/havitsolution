@@ -1,0 +1,12 @@
+[Unit]
+Description=Fix Havit Fuxi-H3 hardware PCM volume
+After=wireplumber.service pipewire.service
+BindsTo=wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fuxi-h3-volume-fix.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

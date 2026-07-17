@@ -1,10 +1,12 @@
 #!/bin/bash
 # =============================================================================
 # Havit Fuxi-H3 — Fix de Volume no Linux (PipeWire)
-# https://github.com/seu-usuario/fuxi-h3-linux-fix
+# https://github.com/hFerbic/havitsolution
 # =============================================================================
 
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -36,7 +38,32 @@ print_err() {
     echo -e "    ${RED}✗${NC} $1"
 }
 
-TOTAL_STEPS=4
+get_fuxi_card() {
+    grep -iE 'FuxiH3|Fuxi-H3' /proc/asound/cards 2>/dev/null | head -1 | awk '{print $1}'
+}
+
+lock_hw_volume() {
+    local card="$1"
+    if [ -z "$card" ]; then
+        return 1
+    fi
+    /usr/bin/amixer -c "$card" sset 'PCM',0 100%,100% > /dev/null 2>&1
+    /usr/bin/amixer -c "$card" sset 'PCM',1 100% > /dev/null 2>&1
+}
+
+hw_volume_is_locked() {
+    local card="$1"
+    local left right mono
+    if [ -z "$card" ]; then
+        return 1
+    fi
+    left=$(/usr/bin/amixer -c "$card" sget 'PCM',0 2>/dev/null | awk '/Front Left:/ {print $5}')
+    right=$(/usr/bin/amixer -c "$card" sget 'PCM',0 2>/dev/null | awk '/Front Right:/ {print $5}')
+    mono=$(/usr/bin/amixer -c "$card" sget 'PCM',1 2>/dev/null | awk '/Mono:/ {print $3}')
+    [ "$left" = "100" ] && [ "$right" = "100" ] && [ "$mono" = "100" ]
+}
+
+TOTAL_STEPS=5
 
 print_header
 
@@ -113,20 +140,7 @@ print_step 3 "Instalando script e regra udev (requer sudo)..."
 SCRIPT_PATH="/usr/local/bin/fuxi-h3-volume-fix.sh"
 UDEV_RULE="/etc/udev/rules.d/99-fuxi-h3.rules"
 
-sudo tee "$SCRIPT_PATH" > /dev/null << 'EOF'
-#!/bin/bash
-sleep 2
-CARD=$(amixer -l 2>/dev/null | grep -i 'FuxiH3\|Fuxi-H3' | head -1 | grep -o 'card [0-9]*' | grep -o '[0-9]*')
-
-if [ -z "$CARD" ]; then
-    exit 0
-fi
-
-amixer -c "$CARD" sset 'PCM',0 100%,100% > /dev/null 2>&1
-amixer -c "$CARD" sset 'PCM',1 100% > /dev/null 2>&1
-EOF
-
-sudo chmod +x "$SCRIPT_PATH"
+sudo install -m 0755 "$SCRIPT_DIR/scripts/fuxi-h3-volume-fix.sh" "$SCRIPT_PATH"
 print_ok "Script criado em $SCRIPT_PATH"
 
 sudo tee "$UDEV_RULE" > /dev/null << 'EOF'
@@ -141,19 +155,35 @@ print_ok "Regras udev recarregadas"
 echo ""
 
 # =============================================================================
-# PASSO 4: Reiniciar serviços de áudio
+# PASSO 4: Serviço systemd do usuário (reaplica após login/restart do áudio)
 # =============================================================================
-print_step 4 "Reiniciando serviços de áudio..."
+print_step 4 "Instalando serviço systemd do usuário..."
+
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+SYSTEMD_SERVICE="$SYSTEMD_USER_DIR/fuxi-h3-volume-fix.service"
+
+mkdir -p "$SYSTEMD_USER_DIR"
+install -m 0644 "$SCRIPT_DIR/scripts/fuxi-h3-volume-fix.service" "$SYSTEMD_SERVICE"
+
+systemctl --user daemon-reload
+systemctl --user enable --now fuxi-h3-volume-fix.service
+print_ok "Serviço fuxi-h3-volume-fix.service habilitado"
+
+echo ""
+
+# =============================================================================
+# PASSO 5: Reiniciar serviços de áudio
+# =============================================================================
+print_step 5 "Reiniciando serviços de áudio..."
 
 systemctl --user restart wireplumber pipewire pipewire-pulse
 print_ok "WirePlumber, PipeWire e PipeWire-Pulse reiniciados"
 
 # Aplicar fix de hardware imediatamente se o dongle estiver conectado
-sleep 1
-CARD_NOW=$(amixer -l 2>/dev/null | grep -i 'FuxiH3\|Fuxi-H3' | head -1 | grep -o 'card [0-9]*' | grep -o '[0-9]*')
+sleep 3
+CARD_NOW=$(get_fuxi_card)
 if [ -n "$CARD_NOW" ]; then
-    amixer -c "$CARD_NOW" sset 'PCM',0 100%,100% > /dev/null 2>&1
-    amixer -c "$CARD_NOW" sset 'PCM',1 100% > /dev/null 2>&1
+    lock_hw_volume "$CARD_NOW"
     print_ok "Volume de hardware travado em 100% (dongle conectado)"
 fi
 
@@ -166,21 +196,24 @@ echo -e "${BLUE}${BOLD}Verificação final...${NC}"
 
 SOFT=$(pactl list sinks 2>/dev/null | grep -A 60 "Fuxi-H3" | grep "soft-mixer" | head -1 | grep -o '".*"')
 HW=$(pactl list sinks 2>/dev/null | grep -A 60 "Fuxi-H3" | grep "enable-hw-volume" | head -1 | grep -o '".*"')
+CARD_NOW=$(get_fuxi_card)
 
-if [ "$SOFT" = '"true"' ] && [ "$HW" = '"false"' ]; then
+if [ "$SOFT" = '"true"' ] && [ "$HW" = '"false"' ] && hw_volume_is_locked "$CARD_NOW"; then
     echo ""
     echo -e "${GREEN}${BOLD}✅ Fix aplicado com sucesso!${NC}"
     echo ""
     echo -e "   ${GREEN}api.alsa.soft-mixer       = true${NC}  (volume controlado por software)"
     echo -e "   ${GREEN}api.alsa.enable-hw-volume = false${NC} (hardware travado em 100%)"
-elif [ -z "$SOFT" ]; then
+    echo -e "   ${GREEN}PCM hardware              = 100%${NC}  (ambos os canais)"
+elif [ -z "$SOFT" ] || [ -z "$CARD_NOW" ]; then
     echo ""
     print_warn "Dongle não está conectado agora — não foi possível verificar."
-    print_warn "Conecte o dongle e rode: pactl list sinks | grep -A 3 'soft-mixer\\|hw-volume'"
+    print_warn "Conecte o dongle e rode: /usr/local/bin/fuxi-h3-volume-fix.sh"
 else
     echo ""
     print_warn "Verificação inconclusiva. Confira manualmente:"
     echo "    pactl list sinks | grep -A 3 'soft-mixer\\|hw-volume'"
+    echo "    /usr/bin/amixer -c \$(grep -i Fuxi /proc/asound/cards | awk '{print \$1}') sget 'PCM'"
 fi
 
 echo ""
